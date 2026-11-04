@@ -1,0 +1,197 @@
+name: CI (with bun)
+
+on:
+  workflow_call:
+    inputs:
+      bun-version:
+        description: Bun version
+        type: string
+        required: false
+        default: latest
+
+      lint-script-name:
+        description: Your linting script name
+        type: string
+        required: false
+        default: lint
+
+      typecheck-script-name:
+        description: Your typecheck script name
+        type: string
+        required: false
+        default: typecheck
+
+      # builds
+      do-build:
+        description: Should this code be built?
+        type: boolean
+        required: false
+        default: true
+
+      build-script-name:
+        description: Your build script name
+        type: string
+        required: false
+        default: build
+
+      package-source-type:
+        description: What is your source type?
+        # - typescript
+        #   - pure-typescript
+        # - javascript
+        #   - pure-javascript # this source type does not need to build
+        type: string
+        required: true
+        default: javascript
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Input Source
+        env:
+          PACKAGE_TYPE: ${{ inputs.package-source-type }}
+        shell: bash
+        run: |
+          case "$PACKAGE_TYPE" in
+            javascript|pure-javascript|typescript|pure-typescript)
+              ;;
+            *)
+              echo "::error::${PACKAGE_TYPE} is not support type on here"
+              exit 1
+          esac
+
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+      
+      - name: Set up Bun
+        uses: Team-Eagle-d/eaglebot-workflows/actions/setup-bun@v1
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Lint
+        run: bun run ${{ inputs.lint-script-name }}
+
+      - name: Typecheck
+        if: contains('pure-javascript', inputs.package-source-type)
+        run: bun run ${{ inputs.typecheck-script-name }}
+
+      - name: Build
+        if: |
+          inputs.do-build == true
+          && contains('javascript,typescript', inputs.package-source-type) 
+        run: bun run ${{ inputs.build-script-name }}
+
+      - name: Valiate Artifact
+        id: validate-results
+        if: inputs.do-build == true
+        shell: bash
+        run: |
+          SOURCE_TYPE="${{ inputs.package-source-type }}"
+
+          [ -f package.json ] || {
+            echo "::error::package.json file does not exist."
+            exit 1 
+          }
+
+          README_EXISTS=true
+          if [ ! -f README ] && [ ! -f README.md ]; then
+            echo "::warning::README(.md) file was not found. Did you forgot this?"
+            README_EXISTS=false
+          fi
+          echo "readme-exists=$README_EXISTS" >> "$GITHUB_OUTPUT"
+
+          CHANGELOG_EXISTS=true
+          if [ ! -f CHANGELOG ] && [ ! -f CHANGELOG.md ]; then
+            echo "::warning::CHANGELOG(.md) file was not found. Did you forgot this?"
+            CHANGELOG_EXISTS=false
+          fi
+          echo "changelog-exists=$CHANGELOG_EXISTS" >> "$GITHUB_OUTPUT"
+
+          function tsconfigCheck() {
+            if [ ! -f tsconfig.json ]; then
+              echo "::warning::tsconfig.json file was not found."
+              return 1
+            fi
+
+            return 0
+          }
+
+          TSCONFIG_EXISTS=false
+          case "$SOURCE_TYPE" in
+            # pures
+            pure-typescript)
+              if tsconfigCheck; then
+                TSCONFIG_EXISTS=true
+              fi
+              ;&
+            pure*)
+              [ -d src ] || {
+                echo "::error::src directroy does not exist."
+                exit 1
+              }
+              ;;
+
+            # norm
+            typescript)
+              if tsconfigCheck; then
+                TSCONFIG_EXISTS=true
+              fi
+              ;&
+            *)
+              [ -d dist ] || {
+                echo "::error::dist directory does not exist."
+                exit 1 
+              }
+              ;;
+          esac
+          echo "tsconfig-exists=$TSCONFIG_EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Make and Copy to Staging Directory
+        if: inputs.do-build == true
+        env:
+          PACKAGE_TYPE: ${{ inputs.package-source-type }}
+          README_EXISTS: ${{ steps.validate-results.outputs.readme-exists }}
+          CHANGELOG_EXISTS: ${{ steps.validate-results.outputs.changelog-exists }}
+          TSCONFIG_EXISTS: ${{ steps.validate-results.outputs.tsconfig-exists }}
+        shell: bash
+        run: |
+          rm -rf artifact
+          mkdir artifact
+
+          cp package.json artifact
+
+          if [ $README_EXISTS == "true" ]; then
+            if [ -f README ]; then
+              cp README artifact
+            else
+              cp README.md artifact
+            fi
+          fi
+
+          if [ $CHANGELOG_EXISTS == "true" ]; then
+            if [ -f CHANGELOG ]; then
+              cp CHANGELOG artifact
+            else
+              cp CHANGELOG.md artifact
+            fi
+          fi
+
+          [ $TSCONFIG_EXISTS == "true" ] && {
+            cp tsconfig.json artifact
+          }
+
+          case $PACKAGE_TYPE in
+            pure*)
+              cp -r src artifact
+              ;;
+            *)
+              cp -r dist artifact
+              ;;
+          esac
+        
+      - name: Upload Artifact
+        if: inputs.do-build == true
+        uses: actions/upload-artifact@v4
+        with:
+          path: artifact/
