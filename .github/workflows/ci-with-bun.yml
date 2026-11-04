@@ -80,7 +80,7 @@ jobs:
         run: bun run ${{ inputs.lint-script-name }}
 
       - name: Typecheck
-        if: contains('pure-javascript', inputs.package-source-type)
+        if: contains('pure-typescript', inputs.package-source-type)
         run: bun run ${{ inputs.typecheck-script-name }}
 
       - name: Build
