@@ -1,0 +1,113 @@
+name: CD
+
+on:
+  workflow_call:
+    inputs:
+      # artifacts
+      artifact-name:
+        description: Your uploaded artifact name
+        type: string
+        required: false
+        default: artifact
+      
+      artifact-repository:
+        description: Your artifact repository to install
+        type: string
+        required: true
+
+      artifact-run-id:
+        description: CI id
+        type: number
+        required: true
+
+      # releases
+      release-type:
+        description: Where to release it?
+        # - none
+        # - github
+        type: string
+        required: false
+        default: none
+    
+    secrets:
+      GH_TOKEN:
+        description: Your GitHub token
+        required: true
+
+jobs:
+  cd:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: artifact/
+          repository: ${{ inputs.artifact-repository }}
+          run-id: ${{ inputs.artifact-run-id }}
+          github-token: ${{ secrets.GH_TOKEN }}
+
+      - name: Inspect Artifact
+        run: ls -laR artifact/
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Packing
+        working-directory: artifact
+        run: bun pm pack --destination ../release
+          
+      # GitHub
+      - name: Get Git Tags
+        id: tags
+        if: inputs.release-type == 'github'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ inputs.artifact-repository }}
+        run: |
+          TAG_NAMES="$(gh api repos/${GITHUB_REPOSITORY}/tags \
+            --paginate \
+            --jq '.[].name')"
+
+          DELIMITER="$(openssl rand -hex 16)"
+          {
+            echo "tag-names<<${DELIMITER}"
+            echo "$TAG_NAMES"
+            echo "${DELIMITER}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Get Current Package Version
+        id: package
+        if: inputs.release-type == 'github'
+        run: |
+          VERSION="$(bun -e 'console.log(require("artifact/package.json").version)')"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check Existing Tag
+        if: inputs.release-type == 'github'
+        env:
+          TAG_NAMES: ${{ steps.tags.outputs.tag-names }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if grep -Fxq "v${VERSION}" <<< "$TAG_NAMES"; then
+            echo "::error::Current version v${VERSION} already exists"
+            exit 1
+          fi
+      
+      - name: Create Release Note
+        if: inputs.release-type == 'github'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ inputs.artifact-repository }}
+          VERSION: ${{ steps.package.outputs.version }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact-run-id }}
+        run: |
+          SOURCE_SHA="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}" \
+            --jq '.head_sha')"
+
+          gh release create "v${VERSION}" ./release/*.tgz \
+            --title "v${VERSION}" \
+            --generate-notes \
+            --target "${SOURCE_SHA}"
