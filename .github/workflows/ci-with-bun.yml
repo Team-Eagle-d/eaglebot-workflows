@@ -55,7 +55,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Input Source
+      - name: Check Input Source Type
         env:
           PACKAGE_TYPE: ${{ inputs.package-source-type }}
         shell: bash
@@ -68,13 +68,42 @@ jobs:
               exit 1
           esac
 
-      - name: Checkout Repository
+      - name: Checkout Target Repository
         uses: actions/checkout@v7
-      
+
+      - name: Check package.json
+        run: |
+          [ -f package.json ] || {
+            echo "::error::package.json does not exists."
+            exit 1
+          }
+
+      - name: Checkout eaglebot-workflows
+        uses: actions/checkout@v7
+        with:
+          path: .workflow-tools
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+
+      - name: Set up eaglebot-workflows Dependencies
+        working-directory: .workflow-tools
+        run: npm ci
+
+      - name: Validate package.json By Node.js
+        id: package-files
+        env:
+          SOURCE_TYPE: ${{ inputs.package-source-type }}
+          PACKAGE_JSON_PATH: ./package.json
+        run: |
+          node ./.workflow-tools/scripts/ci-validate-package-json.js
+
       - name: Set up Bun
         uses: Team-Eagle-d/eaglebot-workflows/actions/setup-bun@v1
         with:
           bun-version: ${{ inputs.bun-version }}
+
+      - name: Set up Project Dependencies
+        run: bun ci
 
       - name: Lint
         run: bun run ${{ inputs.lint-script-name }}
@@ -89,113 +118,15 @@ jobs:
           && contains('javascript,typescript', inputs.package-source-type) 
         run: bun run ${{ inputs.build-script-name }}
 
-      - name: Valiate Artifact
-        id: validate-results
-        if: inputs.do-build == true
-        shell: bash
-        run: |
-          SOURCE_TYPE="${{ inputs.package-source-type }}"
-
-          [ -f package.json ] || {
-            echo "::error::package.json file does not exist."
-            exit 1 
-          }
-
-          README_EXISTS=true
-          if [ ! -f README ] && [ ! -f README.md ]; then
-            echo "::warning::README(.md) file was not found. Did you forgot this?"
-            README_EXISTS=false
-          fi
-          echo "readme-exists=$README_EXISTS" >> "$GITHUB_OUTPUT"
-
-          CHANGELOG_EXISTS=true
-          if [ ! -f CHANGELOG ] && [ ! -f CHANGELOG.md ]; then
-            echo "::warning::CHANGELOG(.md) file was not found. Did you forgot this?"
-            CHANGELOG_EXISTS=false
-          fi
-          echo "changelog-exists=$CHANGELOG_EXISTS" >> "$GITHUB_OUTPUT"
-
-          function tsconfigCheck() {
-            if [ ! -f tsconfig.json ]; then
-              echo "::warning::tsconfig.json file was not found."
-              return 1
-            fi
-
-            return 0
-          }
-
-          TSCONFIG_EXISTS=false
-          case "$SOURCE_TYPE" in
-            # pures
-            pure-typescript)
-              if tsconfigCheck; then
-                TSCONFIG_EXISTS=true
-              fi
-              ;&
-            pure*)
-              [ -d src ] || {
-                echo "::error::src directroy does not exist."
-                exit 1
-              }
-              ;;
-
-            # norm
-            typescript)
-              if tsconfigCheck; then
-                TSCONFIG_EXISTS=true
-              fi
-              ;&
-            *)
-              [ -d dist ] || {
-                echo "::error::dist directory does not exist."
-                exit 1 
-              }
-              ;;
-          esac
-          echo "tsconfig-exists=$TSCONFIG_EXISTS" >> "$GITHUB_OUTPUT"
-
       - name: Make and Copy to Staging Directory
         if: inputs.do-build == true
         env:
           PACKAGE_TYPE: ${{ inputs.package-source-type }}
-          README_EXISTS: ${{ steps.validate-results.outputs.readme-exists }}
-          CHANGELOG_EXISTS: ${{ steps.validate-results.outputs.changelog-exists }}
-          TSCONFIG_EXISTS: ${{ steps.validate-results.outputs.tsconfig-exists }}
+          PACKAGE_JSON_PATH: ./package.json
+          ARTIFACT_PATH: ./artifact
         shell: bash
         run: |
-          rm -rf artifact
-          mkdir artifact
-
-          cp package.json artifact
-
-          if [ $README_EXISTS == "true" ]; then
-            if [ -f README ]; then
-              cp README artifact
-            else
-              cp README.md artifact
-            fi
-          fi
-
-          if [ $CHANGELOG_EXISTS == "true" ]; then
-            if [ -f CHANGELOG ]; then
-              cp CHANGELOG artifact
-            else
-              cp CHANGELOG.md artifact
-            fi
-          fi
-
-          [ $TSCONFIG_EXISTS == "true" ] && {
-            cp tsconfig.json artifact
-          }
-
-          case $PACKAGE_TYPE in
-            pure*)
-              cp -r src artifact
-              ;;
-            *)
-              cp -r dist artifact
-              ;;
-          esac
+          node ./.workflow-tools/scripts/ci-move-artifact.js
         
       - name: Upload Artifact
         if: inputs.do-build == true
