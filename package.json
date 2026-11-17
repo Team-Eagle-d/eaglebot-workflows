@@ -1,0 +1,25 @@
+{
+  "name": "eaglebot-workflows",
+  "version": "2.0.0",
+  "description": "EagleBot을 위한 공통 GitHub Workflows 및 Actions\r ---",
+  "private": true,
+  "homepage": "https://github.com/suil0304/eaglebot-workflows#readme",
+  "bugs": {
+    "url": "https://github.com/suil0304/eaglebot-workflows/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suil0304/eaglebot-workflows.git"
+  },
+  "license": "ISC",
+  "author": "suil0304",
+  "type": "module",
+  "dependencies": {
+    "@types/node": "^26.6.6",
+    "dotenv": "^18.0.10"
+  },
+  "devDependencies": {
+    "package-json-type": "^1.1.2",
+    "semver": "^7.8.6"
+  }
+}
